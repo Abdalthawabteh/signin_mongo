@@ -1,94 +1,120 @@
-if(process.env.NODE_ENV !=='production')
-{
-    require('dotenv').config()
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config()
 }
-
-const express=require('express');
-const app=express();
-const passport=require('passport');
-const bcrypt=require('bcrypt');
-const flash=require('express-flash');
-const session=require('express-session');
-const methodoverride =require('method-override')
+const LocalStrategy = require('passport-local').Strategy
+const methodOverride = require('method-override')
+const session = require('express-session')
+const express = require('express')
+const app = express()
+const bcrypt = require('bcrypt')
+const passport = require('passport')
+const flash = require('express-flash')
 const mongoose=require('mongoose')
 const User=require('./model/user')
 
-mongoose.connect('mongodb://localhost:27017/sign-in-page')
+app.use('/views',express.static('views'))
 
-
-const initializepassword=require('./passport_config');
-const { Mongoose } = require('mongoose');
-initializepassword(
-    passport,
-    email=>users.find(user=> user.email===email),
-    id=>users.find(user=> user.id===id)
-)
-
-
-
-const users=[];
-
-
-app.set('view-engine','ejs')
-app.use(express.urlencoded({extended:false}))
-app.use(flash());
+//connect to database mongoose
+mongoose.connect(process.env.DATA_BASE)
+const db=mongoose.connection
+//set to let ejs files work
+app.set('view-engine', 'ejs')
+//use flasch to desplay the message when error done 
+app.use(express.static(__dirname + '/public'));
+app.use(flash())
 app.use(session({
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false
-  }))
+  secret: process.env.SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false
+}))
+app.use(express.urlencoded({ extended: false }));
+app.use(express.json());
 app.use(passport.initialize())
 app.use(passport.session())
-app.use(methodoverride('_method'))
+app.use(methodOverride('_method'))
+
+//passport athuenticated.
+passport.serializeUser(function (user, done) {
+	done(null, user.id);
+});
+
+passport.deserializeUser(function (id, done) {
+	User.findById(id, function (err, user) {
+		done(err, user);
+	});
+});
+
+passport.use(new LocalStrategy({usernameField:'email'},async function (email, password, done) {
+  User.findOne({email },async function (err, user) {
+		if (err) return done(err);
+		if (!user) return done(null, false, { message: 'Incorrect username.' });
+		await bcrypt.compare(password, user.password, function (err, res) {
+			if (err) return done(err);
+			if (res === false) return done(null, false, { message: 'Incorrect password.' });
+			
+			return done(null, user);
+		});
+	});
+}));
 
 
-app.get('/',checkathuntekated,(req,res)=>{
-res.render('index.ejs')
+
+app.get('/', checkAuthenticated, (req, res) => {
+  res.render('index.ejs', { name: req.user.name })
 })
-app.get('/signin',checknotathuntekated,(req,res)=>{
-res.render('signin.ejs')
+
+app.get('/login', checkNotAuthenticated, (req, res) => {
+  res.render('login.ejs')
 })
-app.get('/signup',checknotathuntekated,(req,res)=>{
-res.render('signup.ejs')
-})
-app.post('/signin',checknotathuntekated,passport.authenticate('local',{
-    successRedirect:'/',
-    failureRedirect:'/signin',
-    failureFlash:true
+
+app.post('/login', checkNotAuthenticated, passport.authenticate('local', {
+  successRedirect: '/',
+  failureRedirect: '/login',
+  failureFlash: true
 }))
-app.post('/signup',checknotathuntekated,async(req,res)=>{
-    try{
-        const hashpassword= await bcrypt.hash(req.body.password, 10)
-        users.push({
-            id:Date.now().toString(),
-            name:req.body.name,
-            email:req.body.email,
-            password:hashpassword
-        })
-        res.redirect('/signin');
-    }catch{
-        res.redirect('/signup');
-    }
+
+app.get('/register', checkNotAuthenticated, (req, res) => {
+  res.render('register.ejs')
 })
 
-app.delete('/logout',(req,res)=>{
-    req.logout()
-    res.redirect('/signin');
+app.post('/register', checkNotAuthenticated, async (req, res) => {
+    const{name,email,password:plaintextpass}=req.body
+
+    
+  try {
+    const password = await bcrypt.hash(plaintextpass, 10)
+    const user=await User.create({
+      name,email,password
+    })
+    console.log(user)
+    res.redirect('/login')
+  } catch(error) {
+    if(error.code===11000){
+     
+      res.redirect('/login');
+      return;
+    }throw console.log(error)
+  }
 })
 
-function checkathuntekated(req,res,next){
-    if(req.isAuthenticated()){
-        return next()
-    }
-    res.redirect('/signin')
+app.delete('/logout', (req, res) => {
+  req.logOut()
+  res.redirect('/login')
+})
+
+function checkAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    return next()
+  }
+
+  res.redirect('/login')
 }
-function checknotathuntekated(req,res,next){
-    if(req.isAuthenticated()){
-    return res.redirect('/')
-    }
-    next()
 
+function checkNotAuthenticated(req, res, next) {
+  if (req.isAuthenticated()) {
+    return res.redirect('/')
+  }
+  next()
 }
 
 app.listen(3000)
-
